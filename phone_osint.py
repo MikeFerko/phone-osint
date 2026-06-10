@@ -52,6 +52,20 @@ PHUNTER_REPO = "https://github.com/N0rz3/Phunter.git"
 # Helpers
 # ---------------------------------------------------------------------------
 
+def parse_e164(number: str) -> tuple[str, str]:
+    """Split an E.164 number into (country_code, local_number) for tools like ignorant."""
+    try:
+        import phonenumbers
+        parsed = phonenumbers.parse(number)
+        return str(parsed.country_code), str(parsed.national_number)
+    except Exception:
+        pass
+    digits = re.sub(r"[^\d]", "", number)
+    if len(digits) == 11 and digits[0] == "1":
+        return "1", digits[1:]
+    return digits[:2], digits[2:]
+
+
 def banner(msg: str) -> str:
     bar = "=" * 60
     return f"\n{bar}\n  {msg}\n{bar}\n"
@@ -64,6 +78,8 @@ def run_cli(cmd: list[str], timeout: int = 60, cwd: str | None = None) -> str:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=cwd,
         )
@@ -117,8 +133,7 @@ def fetch_haveibeenzuckered(number: str) -> str:
 
 def fetch_numlookup(number: str) -> str:
     """Pull basic info from NumLookup (US numbers)."""
-    clean = re.sub(r"[^\d]", "", number)  # digits only for URL path
-    url = f"https://www.numlookup.com/{clean}"
+    url = f"https://www.numlookup.com/{number}"
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=15)
@@ -131,7 +146,7 @@ def fetch_numlookup(number: str) -> str:
         # fallback: grab any result paragraphs
         paragraphs = soup.find_all("p")
         text = " ".join(p.get_text(strip=True) for p in paragraphs[:4])
-        return text or f"No summary found (URL: {url})"
+        return text or f"No summary found — check manually: {url}"
     except Exception as e:
         return f"[ERROR] {e} (URL: {url})"
 
@@ -204,7 +219,8 @@ def run_all(number: str) -> str:
     ignorant_exe = SCRIPTS_DIR / "ignorant.exe"
     if not ignorant_exe.exists():
         ignorant_exe = SCRIPTS_DIR / "ignorant"
-    lines.append(run_cli([str(ignorant_exe), number]))
+    cc, local = parse_e164(number)
+    lines.append(run_cli([str(ignorant_exe), cc, local]))
 
     # --- Phunter ---
     lines.append(banner("Phunter"))
