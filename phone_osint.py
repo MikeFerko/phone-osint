@@ -16,7 +16,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -141,102 +140,64 @@ def fetch_haveibeenzuckered(number: str) -> str:
         return f"[ERROR] {e}"
 
 
-def fetch_numlookup(number: str) -> str:
-    """Pull basic info from NumLookup (US numbers)."""
-    url = f"https://www.numlookup.com/{quote(number, safe='')}"
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        # grab the meta description which typically has the summary
-        meta = soup.find("meta", attrs={"name": "description"})
-        if meta and meta.get("content"):
-            return meta["content"].strip()
-        # fallback: grab any result paragraphs
-        paragraphs = soup.find_all("p")
-        text = " ".join(p.get_text(strip=True) for p in paragraphs[:4])
-        return text or f"No summary found — check manually: {url}"
-    except Exception as e:
-        return f"[ERROR] {e} (URL: {url})"
-
 
 def fetch_800notes(number: str) -> str:
     """Scrape 800notes.com for US/Canada community spam reports."""
     digits = re.sub(r"[^\d]", "", number)
-    url = f"https://800notes.com/Phone.aspx/+{digits}"
+    # 800notes requires dashes: 1-NXX-XXX-XXXX
+    if len(digits) == 11 and digits[0] == "1":
+        formatted = f"{digits[0]}-{digits[1:4]}-{digits[4:7]}-{digits[7:]}"
+    else:
+        formatted = digits
+    url = f"https://800notes.com/Phone.aspx/{formatted}"
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
-        summary = soup.find(id=re.compile(r"phone_summary|summary", re.I))
-        if summary:
-            results.append(summary.get_text(separator=" ", strip=True))
+        # Location summary (always present)
+        for tag in soup.find_all("div", recursive=True):
+            t = tag.get_text(separator=" ", strip=True)
+            if "Country:" in t and len(t) < 200:
+                results.append(t)
+                break
+        # User comments
         comments = soup.find_all("div", class_=re.compile(r"comment|note|msg|post", re.I))
         for c in comments[:5]:
             t = c.get_text(separator=" ", strip=True)
             if len(t) > 10:
                 results.append(t)
+        if not results:
+            # Check for no-comments message
+            for tag in soup.find_all(string=re.compile(r"no comments", re.I)):
+                results.append(str(tag).strip())
+                break
         return "\n".join(results) if results else f"No reports found (URL: {url})"
     except Exception as e:
         return f"[ERROR] {e} (URL: {url})"
 
 
-def fetch_whocalledme(number: str) -> str:
-    """Scrape WhoCalledMe for caller reports (UK/EU focus)."""
-    digits = re.sub(r"[^\d]", "", number)
-    url = f"https://whocalledme.com/Phone-Number/{digits}"
+def fetch_shouldianswer(number: str) -> str:
+    """Scrape ShouldIAnswer.com for spam/scam community reports."""
+    _, local = parse_e164(number)
+    url = f"https://www.shouldianswer.com/phone-number/{local}"
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
-        for tag in soup.find_all(class_=re.compile(r"caller.?name|owner|title", re.I)):
-            t = tag.get_text(strip=True)
-            if len(t) > 2:
-                results.append(f"Caller: {t}")
-                break
-        comments = soup.find_all("div", class_=re.compile(r"comment|report|feedback|review", re.I))
-        for c in comments[:5]:
-            t = c.get_text(separator=" ", strip=True)
-            if len(t) > 10:
-                results.append(t)
-        return "\n".join(results) if results else f"No reports found (URL: {url})"
-    except Exception as e:
-        return f"[ERROR] {e} (URL: {url})"
-
-
-def fetch_truecaller(number: str) -> str:
-    """Query TrueCaller for reverse lookup. Page is JS-rendered so meta tags and og data are the best bet."""
-    cc, local = parse_e164(number)
-    url = f"https://www.truecaller.com/search/{cc}/{local}"
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Referer": "https://www.truecaller.com/",
-        }
-        resp = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        results = []
-        for prop in ("og:title", "og:description"):
-            tag = soup.find("meta", property=prop)
-            if tag and tag.get("content"):
-                results.append(tag["content"].strip())
-        desc = soup.find("meta", attrs={"name": "description"})
-        if desc and desc.get("content"):
-            results.append(desc["content"].strip())
-        for tag in soup.find_all(["h1", "h2", "p"], class_=re.compile(r"name|result|caller|profile", re.I)):
-            t = tag.get_text(strip=True)
-            if len(t) > 3:
-                results.append(t)
-        if results:
-            return "\n".join(dict.fromkeys(results))
-        return f"No data returned (JS-rendered, check manually: {url})"
+        article = soup.find("article")
+        if article:
+            # Rating/status block
+            for tag in article.find_all(["div", "p", "span"]):
+                t = tag.get_text(separator=" ", strip=True)
+                if len(t) > 20 and len(t) < 600:
+                    results.append(t)
+                    if len(results) >= 4:
+                        break
+        return "\n".join(dict.fromkeys(results)) if results else f"No data found (URL: {url})"
     except Exception as e:
         return f"[ERROR] {e} (URL: {url})"
 
@@ -327,17 +288,11 @@ def run_all(number: str) -> str:
     lines.append(banner("Have I Been Zuckered (Facebook breach)"))
     lines.append(fetch_haveibeenzuckered(number))
 
-    lines.append(banner("NumLookup"))
-    lines.append(fetch_numlookup(number))
-
     lines.append(banner("800notes (US/Canada spam reports)"))
     lines.append(fetch_800notes(number))
 
-    lines.append(banner("WhoCalledMe (UK/EU reports)"))
-    lines.append(fetch_whocalledme(number))
-
-    lines.append(banner("TrueCaller (reverse lookup)"))
-    lines.append(fetch_truecaller(number))
+    lines.append(banner("ShouldIAnswer (community ratings)"))
+    lines.append(fetch_shouldianswer(number))
 
     lines.append("\n" + "=" * 60 + "\n")
     return "\n".join(lines)
