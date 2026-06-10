@@ -144,32 +144,36 @@ def fetch_haveibeenzuckered(number: str) -> str:
 def fetch_800notes(number: str) -> str:
     """Scrape 800notes.com for US/Canada community spam reports."""
     digits = re.sub(r"[^\d]", "", number)
-    # 800notes requires dashes: 1-NXX-XXX-XXXX
     if len(digits) == 11 and digits[0] == "1":
         formatted = f"{digits[0]}-{digits[1:4]}-{digits[4:7]}-{digits[7:]}"
     else:
         formatted = digits
     url = f"https://800notes.com/Phone.aspx/{formatted}"
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://800notes.com/",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        }
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
-        # Location summary (always present)
-        for tag in soup.find_all("div", recursive=True):
+        for tag in soup.find_all("div"):
             t = tag.get_text(separator=" ", strip=True)
             if "Country:" in t and len(t) < 200:
                 results.append(t)
                 break
-        # User comments
         comments = soup.find_all("div", class_=re.compile(r"comment|note|msg|post", re.I))
         for c in comments[:5]:
             t = c.get_text(separator=" ", strip=True)
             if len(t) > 10:
                 results.append(t)
         if not results:
-            # Check for no-comments message
             for tag in soup.find_all(string=re.compile(r"no comments", re.I)):
                 results.append(str(tag).strip())
                 break
@@ -190,14 +194,16 @@ def fetch_shouldianswer(number: str) -> str:
         results = []
         article = soup.find("article")
         if article:
-            # Rating/status block
+            # Only grab tags that have no block-level children to avoid duplicating parent+child text
             for tag in article.find_all(["div", "p", "span"]):
+                if tag.find(["div", "p"]):
+                    continue
                 t = tag.get_text(separator=" ", strip=True)
-                if len(t) > 20 and len(t) < 600:
+                if 10 < len(t) < 600 and t not in results:
                     results.append(t)
-                    if len(results) >= 4:
-                        break
-        return "\n".join(dict.fromkeys(results)) if results else f"No data found (URL: {url})"
+                if len(results) >= 6:
+                    break
+        return "\n".join(results) if results else f"No data found (URL: {url})"
     except Exception as e:
         return f"[ERROR] {e} (URL: {url})"
 
