@@ -161,6 +161,86 @@ def fetch_numlookup(number: str) -> str:
         return f"[ERROR] {e} (URL: {url})"
 
 
+def fetch_800notes(number: str) -> str:
+    """Scrape 800notes.com for US/Canada community spam reports."""
+    digits = re.sub(r"[^\d]", "", number)
+    url = f"https://800notes.com/Phone.aspx/+{digits}"
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        summary = soup.find(id=re.compile(r"phone_summary|summary", re.I))
+        if summary:
+            results.append(summary.get_text(separator=" ", strip=True))
+        comments = soup.find_all("div", class_=re.compile(r"comment|note|msg|post", re.I))
+        for c in comments[:5]:
+            t = c.get_text(separator=" ", strip=True)
+            if len(t) > 10:
+                results.append(t)
+        return "\n".join(results) if results else f"No reports found (URL: {url})"
+    except Exception as e:
+        return f"[ERROR] {e} (URL: {url})"
+
+
+def fetch_whocalledme(number: str) -> str:
+    """Scrape WhoCalledMe for caller reports (UK/EU focus)."""
+    digits = re.sub(r"[^\d]", "", number)
+    url = f"https://whocalledme.com/Phone-Number/{digits}"
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        for tag in soup.find_all(class_=re.compile(r"caller.?name|owner|title", re.I)):
+            t = tag.get_text(strip=True)
+            if len(t) > 2:
+                results.append(f"Caller: {t}")
+                break
+        comments = soup.find_all("div", class_=re.compile(r"comment|report|feedback|review", re.I))
+        for c in comments[:5]:
+            t = c.get_text(separator=" ", strip=True)
+            if len(t) > 10:
+                results.append(t)
+        return "\n".join(results) if results else f"No reports found (URL: {url})"
+    except Exception as e:
+        return f"[ERROR] {e} (URL: {url})"
+
+
+def fetch_truecaller(number: str) -> str:
+    """Query TrueCaller for reverse lookup. Page is JS-rendered so meta tags and og data are the best bet."""
+    cc, local = parse_e164(number)
+    url = f"https://www.truecaller.com/search/{cc}/{local}"
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://www.truecaller.com/",
+        }
+        resp = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        for prop in ("og:title", "og:description"):
+            tag = soup.find("meta", property=prop)
+            if tag and tag.get("content"):
+                results.append(tag["content"].strip())
+        desc = soup.find("meta", attrs={"name": "description"})
+        if desc and desc.get("content"):
+            results.append(desc["content"].strip())
+        for tag in soup.find_all(["h1", "h2", "p"], class_=re.compile(r"name|result|caller|profile", re.I)):
+            t = tag.get_text(strip=True)
+            if len(t) > 3:
+                results.append(t)
+        if results:
+            return "\n".join(dict.fromkeys(results))
+        return f"No data returned (JS-rendered, check manually: {url})"
+    except Exception as e:
+        return f"[ERROR] {e} (URL: {url})"
+
+
 # ---------------------------------------------------------------------------
 # Install deps
 # ---------------------------------------------------------------------------
@@ -249,6 +329,15 @@ def run_all(number: str) -> str:
 
     lines.append(banner("NumLookup"))
     lines.append(fetch_numlookup(number))
+
+    lines.append(banner("800notes (US/Canada spam reports)"))
+    lines.append(fetch_800notes(number))
+
+    lines.append(banner("WhoCalledMe (UK/EU reports)"))
+    lines.append(fetch_whocalledme(number))
+
+    lines.append(banner("TrueCaller (reverse lookup)"))
+    lines.append(fetch_truecaller(number))
 
     lines.append("\n" + "=" * 60 + "\n")
     return "\n".join(lines)
