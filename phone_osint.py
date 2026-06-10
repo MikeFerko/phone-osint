@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -71,8 +72,16 @@ def banner(msg: str) -> str:
     return f"\n{bar}\n  {msg}\n{bar}\n"
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHJA-Za-z]|\x1b\[[?][0-9;]*[hl]|\x1b\[[\d;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
 def run_cli(cmd: list[str], timeout: int = 60, cwd: str | None = None) -> str:
     """Run a subprocess, return combined stdout+stderr as a string."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     try:
         result = subprocess.run(
             cmd,
@@ -82,10 +91,11 @@ def run_cli(cmd: list[str], timeout: int = 60, cwd: str | None = None) -> str:
             errors="replace",
             timeout=timeout,
             cwd=cwd,
+            env=env,
         )
-        output = result.stdout.strip()
+        output = strip_ansi(result.stdout.strip())
         if result.returncode != 0 and result.stderr.strip():
-            output += "\n[stderr]\n" + result.stderr.strip()
+            output += "\n[stderr]\n" + strip_ansi(result.stderr.strip())
         return output or "(no output)"
     except FileNotFoundError:
         return f"[ERROR] Command not found: {cmd[0]}"
@@ -133,7 +143,7 @@ def fetch_haveibeenzuckered(number: str) -> str:
 
 def fetch_numlookup(number: str) -> str:
     """Pull basic info from NumLookup (US numbers)."""
-    url = f"https://www.numlookup.com/{number}"
+    url = f"https://www.numlookup.com/{quote(number, safe='')}"
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=15)
